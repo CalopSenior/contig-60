@@ -8,7 +8,9 @@ import subprocess
 root = Path(__file__).resolve().parent.parent
 go = os.environ.get('CONTIG_GO', 'go')
 subprocess.run(['npm.cmd' if os.name == 'nt' else 'npm', 'run', 'build'], cwd=root, check=True)
-shutil.copytree(root / 'web', root / 'desktop' / 'web', dirs_exist_ok=True)
+if (root / 'desktop' / 'web').exists():
+    shutil.rmtree(root / 'desktop' / 'web')
+shutil.copytree(root / 'web', root / 'desktop' / 'web')
 subprocess.run([go, 'test', './...'], cwd=root / 'desktop', check=True)
 out = root / 'downloads'
 out.mkdir(exist_ok=True)

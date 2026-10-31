@@ -27,7 +27,7 @@ A conexão usa WebRTC DataChannel ordenado e criptografado. STUN: `stun.l.google
 
 O histórico pode ser exportado em JSON. Desconexão pausa as ações online; não há retomada automática após recarregar. Hashes detectam divergência, não constituem anticheat: sorteio, dados e relógio dependem da honestidade dos clientes. Não há commit-reveal nem árbitro confiável. Os relógios devem estar sincronizados (tolerância de transporte de dois minutos).
 
-O parser gera uma AST restrita a inteiros de um dígito, quatro operações binárias e parênteses. Não usa eval. Resultado comparado estritamente, conforme as regras solicitadas.
+A jogada é feita clicando diretamente na casa. O solver enumera as permutações dos três dados, as quatro operações e os dois agrupamentos binários, usando aritmética racional para decidir quais valores são possíveis. Não usa eval. Cada peer recalcula as soluções e valida a casa recebida. As expressões de cada colocação são registradas no estado, mas só são exibidas na tela de resultado. O parser AST é mantido para verificação independente nos testes.
 
 ## Decisões de regras
 
@@ -119,3 +119,18 @@ A camada de jogo permanece em TypeScript; `android/src/` contém somente a Activ
 - JDK com javac; alternativamente `CONTIG_ECJ` aponta para o compilador Eclipse ECJ 3.40.0 verificado, executado com Java.
 
 A chave desta distribuição foi criada em `/workspace/contig-signing/contig60.p12`, com a senha em arquivo separado na mesma pasta. Ambos estão fora do Git e não devem ser publicados. Faça backup privado desses arquivos para assinar futuras atualizações; sem a mesma chave, o Android exige desinstalar a versão anterior. A assinatura é própria, para distribuição direta de APK, sem publicação na Play Store.
+
+
+## Fluxo de jogo e telas (versão 1.1)
+
+- `#/menu`: nomes dos jogadores, regras opcionais e sala online.
+- `#/partida`: HUD com placares, dados, ações e tabuleiro. No desktop, o HUD fica ao lado do tabuleiro; no celular, acima dele.
+- `#/resultado`: placares finais e coleção completa de expressões de cada casa conquistada, agrupada por jogada. O histórico inclui dados, jogador, pontuação e indicação de roubo.
+
+As rotas usam fragmentos de URL e funcionam com os servidores estáticos locais, EXE e APK, sem framework de servidor ou regras de redirecionamento. A configuração fica bloqueada depois do início; o menu pode ser consultado sem perder o estado em memória. Recarregar a página encerra a sessão atual.
+
+Não existe mais campo para digitar contas nem botão de confirmação. Um clique válido ocupa a casa e recebe pulso com ✓; um clique inválido recebe movimento com ×, sem aviso textual e sem alterar a vez. As casas válidas não são reveladas antecipadamente. O histórico de expressões não aparece durante a partida, inclusive durante o roubo.
+
+Os nomes podem ter até 24 caracteres. No modo local, configure cada participante no menu. Online, cada participante altera seu próprio nome no campo “Seu nome na sala” antes do início; os nomes são sincronizados entre os pares. P1–P4 continuam sendo os identificadores permanentes usados pelo protocolo e para distinguir nomes iguais.
+
+Todos os participantes online devem usar esta mesma versão (protocolo 2); os códigos de convite da versão anterior não são compatíveis. Os EXEs, o APK e o comando de download são atualizados junto com o build web.

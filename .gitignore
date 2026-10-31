@@ -3,3 +3,7 @@ dist/
 
 __pycache__/
 desktop/web/
+*.keystore
+*.jks
+*.p12
+*.idsig

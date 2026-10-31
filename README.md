@@ -99,3 +99,23 @@ python desktop/build.py
 ```
 
 O script recompila o jogo, incorpora `web/`, testa o servidor e compila os dois EXEs sem dependências DLL de terceiros. `CONTIG_GO` pode selecionar o compilador. A workflow `Validate Windows launcher` verifica o checksum e inicia o EXE x64 em um runner Windows. A compilação cruzada e os testes em Linux não substituem essa validação em Windows.
+
+## Android (APK)
+
+Baixe [`downloads/Contig60.apk`](https://raw.githubusercontent.com/CalopSenior/contig-60/main/downloads/Contig60.apk) no celular e abra o arquivo para instalar. Requer Android 8.0 ou superior e Android System WebView atualizado. O Android pode solicitar autorização para instalar aplicativos dessa origem. Não é necessário instalar Python, Node.js ou um servidor.
+
+O APK inclui o jogo e roda dentro do WebView, com uma origem HTTPS local interceptada para fornecer os arquivos incorporados. O modo local funciona offline; o modo online usa os mesmos códigos manuais WebRTC, para 2 a 4 participantes. Não são solicitadas permissões de câmera, microfone ou armazenamento; a única permissão é INTERNET. Rotação da tela preserva a instância atual. Fechar o aplicativo ou o sistema encerrar seu processo perde a partida; retomada automática não foi implementada.
+
+Esta primeira versão foi compilada e teve assinatura, estrutura e arquivos incorporados verificados. Ainda precisa de teste em aparelho Android para confirmar interface, WebRTC e exportação do histórico. A exportação por download de Blob usada na versão web não tem integração nativa com o armazenamento Android nesta versão.
+
+### Reproduzir o APK
+
+A camada de jogo permanece em TypeScript; `android/src/` contém somente a Activity Java de integração com o Android. Após `npm run build`, configure as variáveis abaixo e execute `python android/build.py`:
+
+- `ANDROID_JAR`: caminho de `platforms/android-35/android.jar`.
+- `ANDROID_BUILD_TOOLS`: pasta de Build Tools 35.0.0, com aapt2, d8, zipalign e apksigner.
+- `CONTIG_KEYSTORE`: arquivo PKCS12/JKS da chave de assinatura, alias `contig60`.
+- `CONTIG_STOREPASS_FILE`: arquivo privado com a senha do keystore.
+- JDK com javac; alternativamente `CONTIG_ECJ` aponta para o compilador Eclipse ECJ 3.40.0 verificado, executado com Java.
+
+A chave desta distribuição foi criada em `/workspace/contig-signing/contig60.p12`, com a senha em arquivo separado na mesma pasta. Ambos estão fora do Git e não devem ser publicados. Faça backup privado desses arquivos para assinar futuras atualizações; sem a mesma chave, o Android exige desinstalar a versão anterior. A assinatura é própria, para distribuição direta de APK, sem publicação na Play Store.

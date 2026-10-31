@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import threading
 import urllib.request
+import urllib.error
 import webbrowser
 import zipfile
 
@@ -85,5 +86,9 @@ def main() -> None:
 if __name__ == '__main__':
     try:
         main()
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403, 404):
+            raise SystemExit('O GitHub não disponibilizou o download sem autenticação. Se o repositório for privado, baixe o ZIP pela sua sessão do GitHub, extraia a pasta completa e execute jogar.py dentro dela (sem --github). Confira também a branch informada em --ref.')
+        raise SystemExit(f'Falha no download do GitHub: HTTP {error.code}')
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         raise SystemExit(f'Não foi possível iniciar o jogo: {error}')

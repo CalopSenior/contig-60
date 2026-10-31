@@ -62,3 +62,40 @@ python jogar.py --port 8080 --no-browser
 O servidor escuta somente neste computador (localhost), em porta livre por padrão. Mantenha o terminal aberto e pressione Ctrl+C para encerrar. Para jogar online, cada participante executa o launcher no próprio computador e troca os códigos de conexão. Continuam valendo as limitações WebRTC/STUN/TURN descritas acima. O download requer acesso ao repositório público; repositórios privados exigem um checkout autenticado com `web/` disponível.
 
 `web/` contém o build estático versionado para permitir o launcher sem ferramentas JavaScript. Após alterar o TypeScript, execute `npm run build` e inclua os arquivos atualizados de `web/` no commit.
+
+## Executável Windows e distribuição no PIBID
+
+Em `downloads/`:
+
+- `Contig60.exe`: Windows 10/11 x64 (Intel/AMD).
+- `Contig60-arm64.exe`: Windows 10/11 ARM64.
+- Arquivos `.sha256`: checksums dos executáveis.
+
+O EXE contém o jogo compilado e o servidor local. Não requer Python, Node.js, Java, Go, instalação ou privilégios de administrador. Basta dar dois cliques. O navegador padrão abre automaticamente; mantenha a janela do servidor aberta enquanto joga. Feche-a ou pressione Ctrl+C para encerrar. O modo local funciona offline. Cada jogador online abre sua própria cópia; WebRTC ainda depende da rede. Os executáveis não têm assinatura Authenticode: o Windows pode mostrar um aviso de editor desconhecido. Não desative as proteções do sistema; para distribuição institucional sem esse aviso, é necessário assinar com certificado da instituição.
+
+Para publicar no site do PIBID, hospede o EXE por HTTPS com acesso público, sem página de login. O botão de download pode apontar diretamente para esse arquivo. Não é necessário publicar o código-fonte ou instalar um backend no site.
+
+### Comando único no CMD
+
+O comando usa **Windows PowerShell 5.1**, que já acompanha o Windows 10/11, e um navegador instalado. Nenhuma instalação de runtime é necessária. Ele baixa o EXE para `%LOCALAPPDATA%\Contig60`, valida um SHA-256 fixo antes de executar e abre o jogo. Precisa de internet para o primeiro download; o EXE baixado pode ser executado depois sem download.
+
+O comando pronto para baixar pelo GitHub está em [`downloads/iniciar-cmd.txt`](downloads/iniciar-cmd.txt). Use o botão Raw e copie a linha inteira para o CMD. O link de download direto é https://raw.githubusercontent.com/CalopSenior/contig-60/main/downloads/Contig60.exe . Para funcionar sem login, este repositório precisa estar público. Se estiver privado, baixe o EXE pela interface autenticada do GitHub; o comando anônimo não terá acesso.
+
+Quando houver um domínio do PIBID, o mantenedor pode gerar a linha com a nova URL (esta etapa de preparação não é feita pelo jogador):
+
+```sh
+python desktop/comando.py https://SEU-DOMINIO/caminho/Contig60.exe
+```
+
+O comando pronto é salvo em `downloads/iniciar-cmd.txt`. Copie o conteúdo desse arquivo para a página do PIBID. O jogador cola a linha no CMD e pressiona Enter. Gere novamente a linha ao publicar uma nova versão: o hash é específico do arquivo distribuído. Esse método não executa scripts baixados nem altera a política de execução do PowerShell. Em máquinas onde a instituição bloqueia PowerShell ou execução de programas, é necessária a liberação pelo administrador.
+
+### Compilar o launcher (somente desenvolvedores)
+
+O jogo continua em TypeScript; o launcher nativo em `desktop/` usa apenas a biblioteca padrão de Go. Para atualizar os executáveis, instale Node.js, Python 3.10+ e Go 1.24+ no computador de desenvolvimento e execute:
+
+```sh
+npm ci
+python desktop/build.py
+```
+
+O script recompila o jogo, incorpora `web/`, testa o servidor e compila os dois EXEs sem dependências DLL de terceiros. `CONTIG_GO` pode selecionar o compilador. A workflow `Validate Windows launcher` verifica o checksum e inicia o EXE x64 em um runner Windows. A compilação cruzada e os testes em Linux não substituem essa validação em Windows.

@@ -1,0 +1,29 @@
+name: Validate Windows launcher
+on:
+  push:
+    paths: ['desktop/**', 'downloads/**', 'web/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and run distributed executable
+        shell: pwsh
+        run: |
+          $expected = (Get-Content downloads/Contig60.exe.sha256).Split(' ')[0]
+          if ((Get-FileHash downloads/Contig60.exe -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
+          $proc = Start-Process -FilePath "$PWD/downloads/Contig60.exe" -ArgumentList '-no-browser','-port','18760' -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/contig.log"
+          try {
+            $response = $null
+            for ($i = 0; $i -lt 30; $i++) {
+              try { $response = Invoke-WebRequest 'http://localhost:18760/'; break } catch { Start-Sleep -Milliseconds 200 }
+            }
+            if (!$response -or $response.Content -notmatch 'Contig 60') { throw 'Game failed to start' }
+            $asset = [regex]::Match($response.Content, 'src="([^"]+\.js)"').Groups[1].Value
+            if (!$asset) { throw 'Missing JS reference' }
+            $js = Invoke-WebRequest "http://localhost:18760$asset"
+            if ($js.RawContentLength -lt 1000) { throw 'Game bundle missing' }
+          } finally { if (!$proc.HasExited) { Stop-Process -Id $proc.Id } }

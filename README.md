@@ -11,19 +11,47 @@ npm run dev
 
 O Vite é o servidor local. Abra a aplicação em localhost (contexto seguro). Para acesso por outro dispositivo use hospedagem HTTPS; HTTP em endereço LAN não fornece todas as APIs criptográficas necessárias. Cada participante pode executar sua própria cópia local.
 
+## Tabuleiros
+
+Na tela inicial o jogador escolhe o tabuleiro (`src/boards.ts`). Os sorteados são gerados na hora e podem ser sorteados de novo tocando no cartão selecionado. Cada número é colorido pela chance de aparecer nos dados (verde = comum, rosa = raro).
+
+| Tabuleiro | Descrição |
+| --- | --- |
+| Oficial PUC | 8×8 em espiral, de 0 a 180, linha de 5 |
+| PUC embaralhado | os mesmos 64 números em posições aleatórias |
+| Totalmente aleatório | 64 números sorteados entre todos os que os dados formam (podem repetir) |
+| Equilibrado | casas comuns e raras na mesma proporção |
+| Sorte grande | pesos favorecem os números fáceis: partidas rápidas |
+| Espiral invertida | o PUC de ponta-cabeça (gigantes nas bordas) |
+| Rápido 6×6 | 36 casas, linha de 4 |
+| Desafio do dia | PUC embaralhado com semente da data: igual para todos no mesmo dia |
+
+O tabuleiro escolhido vai dentro da configuração e cada participante o valida (`sanitizeConfig`): tamanho, linha e apenas valores que três dados conseguem formar.
+
+## Como a partida termina
+
+Antes uma linha de cinco podia nunca sair e a partida se arrastava indefinidamente. Agora:
+
+- **Rodadas**: Curta (10), Normal (20, padrão), Longa (35) ou Sem limite. Vale para os dois modos. Ao fim das rodadas vence o melhor placar.
+- **Linha que encolhe** (Contig 60): a linha exigida cai 1 ao chegar a 50% das rodadas e mais 1 aos 75% (mínimo 3). Quem já tiver a linha menor vence na próxima verificação.
+- **Passe automático**: se nenhuma casa livre pode ser formada com os dados (jogada ou roubo), a vez passa sozinha após uma breve mensagem.
+- Também termina com o tabuleiro cheio.
+
 ## Online
 
-Abra Configurações da partida para ativar a versão expandida e escolher 2, 3 ou 4 jogadores. A opção vem desativada; Blitz e penalidade também. As regras são fixadas ao criar a sala.
+Uma partida online precisa só de um código:
 
-P1 cria a sala e gera uma oferta para cada convidado usando o seletor de destinatário. O convidado seleciona Entrar com convite e processa a oferta: sua identidade e regras vêm do convite de P1. Devolve a resposta para P1 processar. Depois os convidados conectam os pares restantes pelo mesmo fluxo Gerar oferta / Processar código: P2–P3, P2–P4 e P3–P4 quando há quatro jogadores. Cada par é criado somente uma vez. São 1, 3 ou 6 conexões para 2, 3 ou 4 jogadores.
+1. O anfitrião escolhe "Criar sala online", o tabuleiro e as regras, e recebe um código de 5 caracteres (e um link, quando o jogo está hospedado num endereço público).
+2. Os outros escolhem "Entrar em sala" e digitam o código, ou abrem o link. Cada um assume o primeiro assento livre (P2, P3, P4).
+3. Quando todos aparecem como "pronto", o anfitrião inicia a partida.
 
-Após todos os pares e os avisos de prontidão chegarem, P1 pode clicar em Iniciar partida. A ordem inteira é embaralhada uma vez e preservada. P1 continua sendo a identidade do criador, mesmo quando não começa. A desconexão de um par sinaliza pausa aos demais. Recarregue todas as sessões para criar outra sala se a sinalização falhar; reconexão automática não está implementada.
+Um corretor público (PeerJS Cloud, `0.peerjs.com`) apenas apresenta os dispositivos uns aos outros; ele também fornece STUN/TURN, o que ajuda em redes difíceis. As jogadas trafegam diretamente entre os participantes (WebRTC DataChannel criptografado, malha completa), e o corretor não as recebe. Precisa de internet e de acesso a `0.peerjs.com`. Sem o corretor só funciona o modo "neste dispositivo". A ordem inteira é embaralhada uma vez e preservada. P1 continua sendo o anfitrião, mesmo quando não começa. A desconexão de um par pausa a partida; não há reconexão automática: crie outra sala se falhar.
 
-A conexão usa WebRTC DataChannel ordenado e criptografado. STUN: `stun.l.google.com:19302`. Não há servidor de sinalização obrigatório. Alguns NATs/firewalls exigem TURN: esta versão não configura relay e não garante conexão entre todas as redes. O backend local não recebe jogadas.
+O link de convite só aparece quando o jogo é aberto por um endereço público; no EXE (localhost) e no APK compartilha-se apenas o código.
 
 ## Estado e integridade
 
-`src/game.ts` implementa o estado e um reducer determinístico; `src/peer.ts` implementa o transporte; `src/main.ts` coordena interface, autoridade do turno e histórico. A autoridade lógica muda com `currentTurn`, sem renegociar a conexão WebRTC. Ambos mantêm uma cópia do estado. Cada ação leva sessão, sequência, ator, timestamp e hash anterior; o receptor reexecuta a ação e compara o SHA-256 do evento e do estado resultante. Pacotes inválidos pausam a partida. Não se aceita sobrescrita arbitrária do estado pelo adversário.
+`src/game.ts` implementa o estado e um reducer determinístico; `src/room.ts` implementa a sala e o transporte (PeerJS/WebRTC); `src/boards.ts`, os tabuleiros; `src/main.ts` coordena interface, autoridade do turno e histórico. A autoridade lógica muda com `currentTurn`, sem renegociar a conexão WebRTC. Ambos mantêm uma cópia do estado. Cada ação leva sessão, sequência, ator, timestamp e hash anterior; o receptor reexecuta a ação e compara o SHA-256 do evento e do estado resultante. Pacotes inválidos pausam a partida. Não se aceita sobrescrita arbitrária do estado pelo adversário.
 
 O histórico pode ser exportado em JSON. Desconexão pausa as ações online; não há retomada automática após recarregar. Hashes detectam divergência, não constituem anticheat: sorteio, dados e relógio dependem da honestidade dos clientes. Não há commit-reveal nem árbitro confiável. Os relógios devem estar sincronizados (tolerância de transporte de dois minutos).
 
@@ -31,8 +59,8 @@ A jogada é feita clicando diretamente na casa. O solver enumera as permutaçõe
 
 ## Decisões de regras
 
-- Contig começa em 60; cinco em linha vence; tabuleiro cheio decide pelo menor score. Chegar a zero sozinho não encerra o jogo.
-- Clássico começa em zero; soma pontos, ignora cinco em linha, termina após N rodadas ou tabuleiro cheio.
+- Contig começa em 60; a linha exigida (5 no 8×8, 4 no 6×6, encolhendo com as rodadas) vence; tabuleiro cheio ou fim das rodadas decide pelo menor score. Chegar a zero sozinho não encerra o jogo.
+- Clássico começa em zero; soma pontos, ignora linhas, termina após N rodadas ou tabuleiro cheio.
 - Uma rodada contém um turno normal por participante, incluindo passes. A última oportunidade de roubo é concluída antes de avaliar o limite de rodadas.
 - Somente o próximo jogador na ordem pode roubar. Roubo dobra pontos e é seguido pelo turno normal do ladrão, com botão de rolagem.
 - Blitz limita apenas INPUT_MATH a 30 segundos. Roubo não tem limite.
@@ -41,7 +69,7 @@ A jogada é feita clicando diretamente na casa. O solver enumera as permutaçõe
 
 Testes cobrem parser, uso exato dos dados, adjacência, turno, roubo, timer, penalidade, linhas, tabuleiro cheio e limite de rodadas.
 
-A sala em `src/room.ts` gerencia a malha completa de pares e identifica o remetente pelo canal, sem confiar apenas no ator declarado no pacote. O turno e o histórico permanecem replicados em todos os participantes.
+A sala em `src/room.ts` gerencia a malha completa de pares e identifica o remetente pela ligação (o ID do par é `contig60-CODIGO-N`), sem confiar apenas no ator declarado no pacote. O turno e o histórico permanecem replicados em todos os participantes.
 
 ## Jogar somente com Python (sem Node.js)
 
@@ -59,7 +87,7 @@ python jogar.py --ref main        # permite também uma tag ou SHA
 python jogar.py --port 8080 --no-browser
 ```
 
-O servidor escuta somente neste computador (localhost), em porta livre por padrão. Mantenha o terminal aberto e pressione Ctrl+C para encerrar. Para jogar online, cada participante executa o launcher no próprio computador e troca os códigos de conexão. Continuam valendo as limitações WebRTC/STUN/TURN descritas acima. O download requer acesso ao repositório público; repositórios privados exigem um checkout autenticado com `web/` disponível.
+O servidor escuta somente neste computador (localhost), em porta livre por padrão. Mantenha o terminal aberto e pressione Ctrl+C para encerrar. Para jogar online, cada participante executa o launcher no próprio computador; um cria a sala e passa o código de 5 caracteres aos outros (seção Online). O download requer acesso ao repositório público; repositórios privados exigem um checkout autenticado com `web/` disponível.
 
 `web/` contém o build estático versionado para permitir o launcher sem ferramentas JavaScript. Após alterar o TypeScript, execute `npm run build` e inclua os arquivos atualizados de `web/` no commit.
 
@@ -104,7 +132,7 @@ O script recompila o jogo, incorpora `web/`, testa o servidor e compila os dois 
 
 Baixe [`downloads/Contig60.apk`](https://raw.githubusercontent.com/CalopSenior/contig-60/main/downloads/Contig60.apk) no celular e abra o arquivo para instalar. Requer Android 8.0 ou superior e Android System WebView atualizado. O Android pode solicitar autorização para instalar aplicativos dessa origem. Não é necessário instalar Python, Node.js ou um servidor.
 
-O APK inclui o jogo e roda dentro do WebView, com uma origem HTTPS local interceptada para fornecer os arquivos incorporados. O modo local funciona offline; o modo online usa os mesmos códigos manuais WebRTC, para 2 a 4 participantes. Não são solicitadas permissões de câmera, microfone ou armazenamento; a única permissão é INTERNET. Rotação da tela preserva a instância atual. Fechar o aplicativo ou o sistema encerrar seu processo perde a partida; retomada automática não foi implementada.
+O APK inclui o jogo e roda dentro do WebView, com uma origem HTTPS local interceptada para fornecer os arquivos incorporados. O modo local funciona offline; o modo online usa o código de sala (seção Online), para 2 a 4 participantes. O WebView deste APK bloqueia requisições HTTP a outros hosts; o corretor PeerJS usa WebSocket e WebRTC, que não passam por esse filtro, mas isso ainda precisa ser confirmado num aparelho. Não são solicitadas permissões de câmera, microfone ou armazenamento; a única permissão é INTERNET. Rotação da tela preserva a instância atual. Fechar o aplicativo ou o sistema encerrar seu processo perde a partida; retomada automática não foi implementada.
 
 Esta primeira versão foi compilada e teve assinatura, estrutura e arquivos incorporados verificados. Ainda precisa de teste em aparelho Android para confirmar interface, WebRTC e exportação do histórico. A exportação por download de Blob usada na versão web não tem integração nativa com o armazenamento Android nesta versão.
 
@@ -121,16 +149,13 @@ A camada de jogo permanece em TypeScript; `android/src/` contém somente a Activ
 A chave desta distribuição foi criada em `/workspace/contig-signing/contig60.p12`, com a senha em arquivo separado na mesma pasta. Ambos estão fora do Git e não devem ser publicados. Faça backup privado desses arquivos para assinar futuras atualizações; sem a mesma chave, o Android exige desinstalar a versão anterior. A assinatura é própria, para distribuição direta de APK, sem publicação na Play Store.
 
 
-## Fluxo de jogo e telas (versão 1.1)
+## Fluxo de jogo e telas (versão 2.0)
 
-- `#/menu`: nomes dos jogadores, regras opcionais e sala online.
-- `#/partida`: HUD com placares, dados, ações e tabuleiro. No desktop, o HUD fica ao lado do tabuleiro; no celular, acima dele.
-- `#/resultado`: placares finais e coleção completa de expressões de cada casa conquistada, agrupada por jogada. O histórico inclui dados, jogador, pontuação e indicação de roubo.
+- `#/menu`: modo (neste dispositivo, criar sala, entrar em sala), tabuleiro, regras e nomes. `#/entrar/CODIGO` abre já na entrada de sala.
+- `#/sala`: código, link, lista de jogadores e regras da sala.
+- `#/partida`: placar, rodada, linha exigida, dados e tabuleiro. No celular tudo cabe numa tela.
+- `#/resultado`: placares finais, como terminou e todas as expressões de cada casa conquistada.
 
-As rotas usam fragmentos de URL e funcionam com os servidores estáticos locais, EXE e APK, sem framework de servidor ou regras de redirecionamento. A configuração fica bloqueada depois do início; o menu pode ser consultado sem perder o estado em memória. Recarregar a página encerra a sessão atual.
+Um clique válido ocupa a casa (✓); um inválido balança (×) sem alterar a vez. As casas válidas não são reveladas antecipadamente, e as contas só aparecem no resultado. Os nomes têm até 24 caracteres. Todos os participantes online devem usar a mesma versão: o protocolo mudou (sala por código, tabuleiro na configuração).
 
-Não existe mais campo para digitar contas nem botão de confirmação. Um clique válido ocupa a casa e recebe pulso com ✓; um clique inválido recebe movimento com ×, sem aviso textual e sem alterar a vez. As casas válidas não são reveladas antecipadamente. O histórico de expressões não aparece durante a partida, inclusive durante o roubo.
-
-Os nomes podem ter até 24 caracteres. No modo local, configure cada participante no menu. Online, cada participante altera seu próprio nome no campo “Seu nome na sala” antes do início; os nomes são sincronizados entre os pares. P1–P4 continuam sendo os identificadores permanentes usados pelo protocolo e para distinguir nomes iguais.
-
-Todos os participantes online devem usar esta mesma versão (protocolo 2); os códigos de convite da versão anterior não são compatíveis. Os EXEs, o APK e o comando de download são atualizados junto com o build web.
+Os EXEs, o APK e o comando de download precisam ser regerados para incluir esta versão (veja as seções acima). O APK e o EXE já publicados continuam com a versão anterior até lá.

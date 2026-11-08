@@ -1,4 +1,4 @@
-import {solutions} from './solver';
+import {reachableValues} from './solver';
 
 /** Um tabuleiro quadrado pronto para jogar. `cells` vai em ordem de linhas. */
 export type BoardSpec = {id: string; name: string; size: number; line: number; cells: number[]};
@@ -11,42 +11,54 @@ export type BoardDef = {
   line: number;
   /** Tabuleiros sorteados mudam a cada clique em "sortear de novo". */
   random: boolean;
+  /** Mesão: tabuleiro grande, para muitos jogadores. */
+  table: boolean;
+  dice: DiceCount;
   make: () => number[];
 };
 
 /* ---------- Probabilidades ---------- */
 
-/** Todas as combinações de dados (sem ordem) com seu peso entre as 216 possíveis. */
-function rolls(): {dice: number[]; weight: number}[] {
+export type DiceCount = 3 | 5;
+const FACT = [1, 1, 2, 6, 24, 120];
+
+/** Todas as combinações de `n` dados (sem ordem) com seu peso entre as 6^n possíveis. */
+function rolls(n: number): {dice: number[]; weight: number}[] {
   const list: {dice: number[]; weight: number}[] = [];
-  for (let a = 1; a <= 6; a++) for (let b = a; b <= 6; b++) for (let c = b; c <= 6; c++) {
-    const weight = a === b && b === c ? 1 : a === b || b === c ? 3 : 6;
-    list.push({dice: [a, b, c], weight});
-  }
+  const walk = (dice: number[], min: number) => {
+    if (dice.length === n) {
+      const counts = new Map<number, number>();
+      for (const d of dice) counts.set(d, (counts.get(d) ?? 0) + 1);
+      list.push({dice: [...dice], weight: FACT[n] / [...counts.values()].reduce((x, c) => x * FACT[c], 1)});
+      return;
+    }
+    for (let d = min; d <= 6; d++) walk([...dice, d], d);
+  };
+  walk([], 1);
   return list;
 }
 
-let coverageCache: Map<number, number> | undefined;
-/** Para cada valor atingível: chance (0 a 1) de que uma rolada de três dados consiga formá-lo. */
-export function coverage(): ReadonlyMap<number, number> {
-  if (!coverageCache) {
-    const map = new Map<number, number>();
-    for (const {dice, weight} of rolls()) {
-      for (const value of Object.keys(solutions(dice))) map.set(Number(value), (map.get(Number(value)) ?? 0) + weight / 216);
-    }
-    coverageCache = map;
+const coverageCache = new Map<number, Map<number, number>>();
+/** Para cada valor atingível: chance (0 a 1) de que uma rolada consiga formá-lo. */
+export function coverage(dice: DiceCount = 3): ReadonlyMap<number, number> {
+  let map = coverageCache.get(dice);
+  if (!map) {
+    map = new Map<number, number>();
+    for (const roll of rolls(dice)) for (const value of reachableValues(roll.dice)) map.set(value, (map.get(value) ?? 0) + roll.weight / 6 ** dice);
+    coverageCache.set(dice, map);
   }
-  return coverageCache;
+  return map;
 }
 
 /** Valores que podem aparecer num tabuleiro: inteiros não negativos que algum lançamento consegue formar. */
-export const reachable = (value: number) => Number.isInteger(value) && value >= 0 && coverage().has(value);
-export const universe = () => [...coverage().keys()].filter(v => v >= 0).sort((a, b) => a - b);
+export const reachable = (value: number, dice: DiceCount = 3) => Number.isInteger(value) && value >= 0 && coverage(dice).has(value);
+export const universe = (dice: DiceCount = 3) => [...coverage(dice).keys()].filter(v => v >= 0).sort((a, b) => a - b);
 
 /** 0 = muito comum ... 4 = raríssimo. Usado para colorir os números. */
-export function tier(value: number): 0 | 1 | 2 | 3 | 4 {
-  const p = coverage().get(value) ?? 0;
-  return p >= 0.5 ? 0 : p >= 0.3 ? 1 : p >= 0.15 ? 2 : p >= 0.05 ? 3 : 4;
+export const TIER_LIMITS = [0.5, 0.3, 0.15, 0.05] as const;
+export function tier(value: number, dice: DiceCount = 3): 0 | 1 | 2 | 3 | 4 {
+  const p = coverage(dice).get(value) ?? 0;
+  return p >= TIER_LIMITS[0] ? 0 : p >= TIER_LIMITS[1] ? 1 : p >= TIER_LIMITS[2] ? 2 : p >= TIER_LIMITS[3] ? 3 : 4;
 }
 
 /* ---------- Aleatoriedade ---------- */
@@ -112,8 +124,8 @@ function spiralOrder(size: number): number[] {
 const rarity = (a: number, b: number) => (coverage().get(b)! - coverage().get(a)!) || a - b;
 
 /** Sorteia valores (com repetição) onde cada um pesa `weight(value)`. */
-function weighted(count: number, weight: (value: number) => number, rng: Rng): number[] {
-  const values = universe(), weights = values.map(weight), total = weights.reduce((x, y) => x + y, 0);
+function weighted(count: number, weight: (value: number) => number, rng: Rng, dice: DiceCount = 3): number[] {
+  const values = universe(dice), weights = values.map(weight), total = weights.reduce((x, y) => x + y, 0);
   return Array.from({length: count}, () => {
     let r = rng() * total;
     for (let i = 0; i < values.length; i++) { r -= weights[i]; if (r < 0) return values[i]; }
@@ -133,14 +145,18 @@ function dayKey(date = new Date()) {
 }
 
 export const BOARD_DEFS: readonly BoardDef[] = [
-  {id: 'puc', name: 'Oficial PUC', tagline: 'O clássico: 8×8 em espiral, de 0 a 180.', size: 8, line: 5, random: false, make: () => [...PUC]},
-  {id: 'puc-shuffle', name: 'PUC embaralhado', tagline: 'Os mesmos 64 números, em lugares aleatórios.', size: 8, line: 5, random: true, make: () => shuffle(PUC, cryptoRng)},
-  {id: 'random', name: 'Totalmente aleatório', tagline: '64 números sorteados (e que podem se repetir) entre todos os possíveis.', size: 8, line: 5, random: true, make: () => weighted(64, () => 1, cryptoRng)},
-  {id: 'balanced', name: 'Equilibrado', tagline: 'Casas comuns e raras na mesma medida: justo e imprevisível.', size: 8, line: 5, random: true, make: () => balanced(64, cryptoRng)},
-  {id: 'lucky', name: 'Sorte grande', tagline: 'Muitos números fáceis de formar. Partidas rápidas e cheias de linhas.', size: 8, line: 5, random: true, make: () => weighted(64, v => coverage().get(v)! ** 2, cryptoRng)},
-  {id: 'inverted', name: 'Espiral invertida', tagline: 'O PUC de ponta-cabeça: os gigantes ficam nas bordas.', size: 8, line: 5, random: false, make: () => {const order = spiralOrder(8), out = new Array<number>(64); order.forEach((cell, i) => {out[cell] = PUC[order[63 - i]];}); return out;}},
-  {id: 'rapido', name: 'Rápido 6×6', tagline: '36 casas e linha de 4. Dá para terminar num café.', size: 6, line: 4, random: false, make: () => [...RAPIDO]},
-  {id: 'daily', name: 'Desafio do dia', tagline: 'Um PUC embaralhado que é igual para todo mundo hoje.', size: 8, line: 5, random: false, make: () => shuffle(PUC, seeded(dayKey() * 7919))},
+  {id: 'puc', name: 'Oficial PUC', tagline: 'O clássico: 8×8 em espiral, de 0 a 180.', size: 8, line: 5, random: false, table: false, dice: 3, make: () => [...PUC]},
+  {id: 'puc-shuffle', name: 'PUC embaralhado', tagline: 'Os mesmos 64 números, em lugares aleatórios.', size: 8, line: 5, random: true, table: false, dice: 3, make: () => shuffle(PUC, cryptoRng)},
+  {id: 'random', name: 'Totalmente aleatório', tagline: '64 números sorteados (e que podem se repetir) entre todos os possíveis.', size: 8, line: 5, random: true, table: false, dice: 3, make: () => weighted(64, () => 1, cryptoRng)},
+  {id: 'balanced', name: 'Equilibrado', tagline: 'Casas comuns e raras na mesma medida: justo e imprevisível.', size: 8, line: 5, random: true, table: false, dice: 3, make: () => balanced(64, cryptoRng)},
+  {id: 'lucky', name: 'Sorte grande', tagline: 'Muitos números fáceis de formar. Partidas rápidas e cheias de linhas.', size: 8, line: 5, random: true, table: false, dice: 3, make: () => weighted(64, v => coverage().get(v)! ** 2, cryptoRng)},
+  {id: 'inverted', name: 'Espiral invertida', tagline: 'O PUC de ponta-cabeça: os gigantes ficam nas bordas.', size: 8, line: 5, random: false, table: false, dice: 3, make: () => {const order = spiralOrder(8), out = new Array<number>(64); order.forEach((cell, i) => {out[cell] = PUC[order[63 - i]];}); return out;}},
+  {id: 'rapido', name: 'Rápido 6×6', tagline: '36 casas e linha de 4. Dá para terminar num café.', size: 6, line: 4, random: false, table: false, dice: 3, make: () => [...RAPIDO]},
+  {id: 'daily', name: 'Desafio do dia', tagline: 'Um PUC embaralhado que é igual para todo mundo hoje.', size: 8, line: 5, random: false, table: false, dice: 3, make: () => shuffle(PUC, seeded(dayKey() * 7919))},
+  {id: 'mesao5-10', name: 'Mesão 10×10', tagline: '100 casas e números enormes (até 1296): 5 dados, descarte um.', size: 10, line: 6, random: true, table: true, dice: 5, make: () => weighted(100, v => coverage(5).get(v)!, cryptoRng, 5)},
+  {id: 'mesao5-12', name: 'Mesão gigante 12×12', tagline: '144 casas para mesas cheias. 5 dados, descarte um.', size: 12, line: 7, random: true, table: true, dice: 5, make: () => weighted(144, v => coverage(5).get(v)!, cryptoRng, 5)},
+  {id: 'mesao3-10', name: 'Mesão repetido 10×10', tagline: '100 casas com números repetidos. Regra normal de 3 dados.', size: 10, line: 6, random: true, table: true, dice: 3, make: () => weighted(100, v => coverage(3).get(v)!, cryptoRng)},
+  {id: 'mesao3-12', name: 'Mesão repetido 12×12', tagline: '144 casas com números repetidos. Regra normal de 3 dados.', size: 12, line: 7, random: true, table: true, dice: 3, make: () => weighted(144, v => coverage(3).get(v)!, cryptoRng)},
 ];
 
 export function boardFrom(def: BoardDef, cells = def.make()): BoardSpec {

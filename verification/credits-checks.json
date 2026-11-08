@@ -1,0 +1,39 @@
+{
+  "unitTests": 29,
+  "build": "npm run build",
+  "browserChecks": [
+    "Orientação abre com os dois retratos",
+    "Aline e Isabella presentes",
+    "Três apoiadores",
+    "Seta direita abre Sobre",
+    "Home seleciona Equipe",
+    "End seleciona Sobre",
+    "Escape volta ao menu",
+    "Foco devolvido ao botão Créditos",
+    "Formulário preservado",
+    "Tabuleiro preservado ao voltar à partida",
+    "Dados preservados",
+    "Placar preservado",
+    "Fase da partida preservada",
+    "Sem rolagem horizontal no celular",
+    "Sem rolagem horizontal: orientacao",
+    "Sem rolagem horizontal: apoio",
+    "Sem rolagem horizontal: sobre",
+    "Retratos de orientação têm largura no celular",
+    "Sem rolagem horizontal em paisagem",
+    "Sem rolagem horizontal em 320px",
+    "Orientação cabe em 320px",
+    "Build final contém os dez retratos",
+    "Atlas compilado carregado na proporção 5:2",
+    "Créditos voltam à ajuda de origem",
+    "Posição de rolagem restaurada",
+    "Histórico do navegador funciona",
+    "Sem erros de JavaScript ou recursos ausentes"
+  ],
+  "atlas": {
+    "width": 1983,
+    "height": 793
+  },
+  "errors": [],
+  "badResponses": []
+}

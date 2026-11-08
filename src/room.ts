@@ -1,12 +1,11 @@
 import Peer, {type DataConnection} from 'peerjs';
-import {participants, playerName, sanitizeConfig, PLAYERS, type Config, type Player} from './game';
+import {SANITY_PLAYER_GUARD, playerName, sanitizeConfig, type Config, type Player} from './game';
 
 /**
- * Sala online. Um corretor público (PeerJS) só apresenta os jogadores uns aos outros;
- * depois disso as jogadas trafegam direto entre os dispositivos (WebRTC, malha completa).
- *
- * O anfitrião é sempre P1 e tem o ID `contig60-CODIGO-1`. Quem entra assume o primeiro
- * assento livre (P2, P3, P4) e a ligação entre dois convidados é aberta pelo de número maior.
+ * Sala online em estrela. Um corretor público (PeerJS) só apresenta os jogadores ao anfitrião;
+ * depois as mensagens passam direto por WebRTC. O anfitrião (P1) distribui os assentos,
+ * é quem põe as jogadas em ordem e as repassa a todos. Funciona com qualquer número de jogadores
+ * sem precisar de uma conexão entre cada par.
  */
 const PREFIX = 'contig60-';
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -14,17 +13,26 @@ export const CODE_LENGTH = 5;
 
 export const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(CODE_LENGTH)), n => ALPHABET[n % ALPHABET.length]).join('');
 export const normalizeCode = (raw: string) => raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_LENGTH);
-const peerId = (code: string, p: Player) => `${PREFIX}${code}-${p[1]}`;
-const playerOf = (code: string, id: string): Player | undefined => PLAYERS.find(p => peerId(code, p) === id);
+const hostId = (code: string) => PREFIX + code;
+const seatName = (index: number) => `P${index + 2}` as Player;
 
+export type Entry = {p: Player; name: string; here: boolean};
 export type RoomEvents = {
+  /** Mensagem de jogo (não da sala). `sender` é o assento de onde veio. */
   receive: (sender: Player, data: unknown) => void;
   changed: () => void;
   /** Problema depois que a sala já estava aberta. */
   failed: (message: string) => void;
 };
 
-type Wire = {type: 'HELLO'; room: string; name: string; config?: Config} | {type: 'READY'; room: string; name: string} | {type: 'NOT_READY'; room: string};
+type Wire =
+  | {type: 'HELLO'; room: string; name: string}
+  | {type: 'NAME'; name: string}
+  | {type: 'WELCOME'; room: string; you: Player; config: Config; roster: Entry[]}
+  | {type: 'ROSTER'; roster: Entry[]}
+  | {type: 'SEAT'; you: Player}
+  | {type: 'DENIED'; reason: string};
+const CONTROL = ['HELLO', 'NAME', 'WELCOME', 'ROSTER', 'SEAT', 'DENIED'];
 
 function describe(error: {type?: string; message?: string}): string {
   switch (error.type) {
@@ -35,26 +43,35 @@ function describe(error: {type?: string; message?: string}): string {
   }
 }
 
-function openPeer(id: string): Promise<Peer> {
+function openPeer(id?: string): Promise<Peer> {
   return new Promise((resolve, reject) => {
-    const peer = new Peer(id, {debug: 0});
+    const peer = id ? new Peer(id, {debug: 0}) : new Peer({debug: 0});
     const timer = setTimeout(() => { peer.destroy(); reject({type: 'network'}); }, 12000);
     peer.once('open', () => { clearTimeout(timer); resolve(peer); });
     peer.once('error', e => { clearTimeout(timer); peer.destroy(); reject(e); });
   });
 }
 
+type Seat = {conn: DataConnection; name: string; here: boolean};
+
 export class Room {
-  readonly names: Partial<Record<Player, string>> = {};
-  readonly ready = new Set<Player>();
-  readonly links = new Map<Player, DataConnection>();
-  config?: Config;
+  config: Config;
+  me: Player = 'P1';
+  roster: Entry[] = [];
+  readonly isHost: boolean;
   private closed = false;
-  private constructor(readonly code: string, readonly me: Player, private peer: Peer, private events: RoomEvents, config?: Config) {
+  private locked = false;
+  private seats: Seat[] = []; // anfitrião: assentos P2, P3, ... em ordem
+  private hostLink?: DataConnection; // convidado
+  private hostName = 'P1';
+  private onWelcome: (error?: string) => void = () => {};
+
+  private constructor(readonly code: string, private peer: Peer, private events: RoomEvents, config: Config, host: boolean) {
     this.config = config;
-    peer.on('connection', conn => this.accept(conn));
+    this.isHost = host;
     peer.on('error', e => { if (!this.closed && e.type !== 'peer-unavailable') this.events.failed(describe(e)); });
     peer.on('disconnected', () => { if (!this.closed) peer.reconnect(); });
+    if (host) peer.on('connection', conn => this.accept(conn));
   }
 
   /** Cria uma sala nova. Repete com outro código se o sorteado já estiver em uso. */
@@ -62,8 +79,9 @@ export class Room {
     for (let attempt = 0; ; attempt++) {
       const code = newCode();
       try {
-        const room = new Room(code, 'P1', await openPeer(peerId(code, 'P1')), events, config);
-        room.names.P1 = playerName(name, 'P1');
+        const room = new Room(code, await openPeer(hostId(code)), events, config, true);
+        room.hostName = playerName(name, 'P1');
+        room.publish();
         return room;
       } catch (e) {
         if ((e as {type?: string}).type !== 'unavailable-id' || attempt >= 4) throw Error(describe(e as {type?: string}));
@@ -71,127 +89,135 @@ export class Room {
     }
   }
 
-  /** Entra numa sala existente no primeiro assento livre. */
+  /** Entra numa sala existente. O anfitrião define o assento. */
   static async join(rawCode: string, name: string, events: RoomEvents): Promise<Room> {
     const code = normalizeCode(rawCode);
     if (code.length !== CODE_LENGTH) throw Error('O código da sala tem 5 letras ou números.');
-    for (const me of PLAYERS.slice(1)) {
-      let peer: Peer;
-      try { peer = await openPeer(peerId(code, me)); } catch (e) {
-        if ((e as {type?: string}).type === 'unavailable-id') continue;
-        throw Error(describe(e as {type?: string}));
-      }
-      const room = new Room(code, me, peer, events);
-      room.names[me] = playerName(name, me);
-      await room.enter();
-      return room;
-    }
-    throw Error('Sala cheia.');
-  }
-
-  /** Liga ao anfitrião e espera as regras da sala. */
-  private enter(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    let peer: Peer;
+    try { peer = await openPeer(); } catch (e) { throw Error(describe(e as {type?: string})); }
+    const room = new Room(code, peer, events, undefined as unknown as Config, false);
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const fail = (message: string) => { if (settled) return; settled = true; clearTimeout(timer); this.close(); reject(Error(message)); };
-      const timer = setTimeout(() => fail('Sala não encontrada. Confira o código.'), 10000);
-      this.peer.on('error', e => { if (e.type === 'peer-unavailable' && !this.config) fail(describe(e)); });
-      this.onConfig = () => { if (settled) return; settled = true; clearTimeout(timer); resolve(); };
-      this.onReject = fail;
-      this.dial('P1');
+      const done = (error?: string) => { if (settled) return; settled = true; clearTimeout(timer); if (error) { room.close(); reject(Error(error)); } else resolve(); };
+      const timer = setTimeout(() => done('Sala não encontrada. Confira o código.'), 10000);
+      peer.on('error', e => { if (e.type === 'peer-unavailable') done(describe(e)); });
+      room.onWelcome = done;
+      const conn = peer.connect(hostId(code), {serialization: 'json', reliable: true});
+      room.hostLink = conn;
+      const hello = () => conn.send({type: 'HELLO', room: code, name: playerName(name, 'P2')} satisfies Wire);
+      if (conn.open) hello(); else conn.on('open', hello);
+      conn.on('data', data => room.onGuestData(conn, data));
+      conn.on('close', () => { if (!settled) done('A sala fechou a conexão.'); else room.lost(); });
     });
+    return room;
   }
-  private onConfig: () => void = () => {};
-  private onReject: (message: string) => void = () => {};
 
-  get members(): Player[] { return this.config ? participants(this.config) : []; }
-  get others(): Player[] { return this.members.filter(p => p !== this.me); }
-  private isOpen(p: Player) { return !!this.links.get(p)?.open; }
-  get linked() { return this.config !== undefined && this.others.every(p => this.isOpen(p)); }
-  get complete() { return this.linked && this.members.every(p => this.ready.has(p)); }
-  /** Jogadores já conectados a mim (para a lista da sala). */
-  present(p: Player) { return p === this.me || this.isOpen(p); }
+  /** Interface: o jogador está ligado ao anfitrião? */
+  get linked() { return this.isHost || !!this.hostLink?.open; }
+  present(p: Player) { return this.roster.find(e => e.p === p)?.here ?? false; }
+  nameOf(p: Player): string { return this.roster.find(e => e.p === p)?.name ?? p; }
+  get names(): Partial<Record<Player, string>> { return Object.fromEntries(this.roster.map(e => [e.p, e.name])); }
+  get capacity() { return this.config.table ? SANITY_PLAYER_GUARD : this.config.playerCount; }
 
-  setName(name: string) { this.names[this.me] = playerName(name, this.me); this.refresh(); }
-
-  private dial(target: Player) {
-    if (this.closed || this.links.get(target)) return;
-    this.bind(target, this.peer.connect(peerId(this.code, target), {serialization: 'json', reliable: true}));
+  /* ---------- anfitrião ---------- */
+  private build(): Entry[] {
+    return [{p: 'P1', name: this.hostName, here: true}, ...this.seats.map((s, i) => ({p: seatName(i), name: s.name, here: s.here}))];
   }
+  private publish() {
+    this.roster = this.build();
+    for (const s of this.seats) if (s.here && s.conn.open) s.conn.send({type: 'ROSTER', roster: this.roster} satisfies Wire);
+    this.events.changed();
+  }
+  /** Depois de iniciar a partida ninguém mais entra e os assentos ficam fixos. */
+  lock() { this.locked = true; }
 
   private accept(conn: DataConnection) {
-    const from = playerOf(this.code, conn.peer);
-    const stale = from ? this.links.get(from) : undefined;
-    if (!from || from === this.me || (this.config && !this.members.includes(from)) || (stale?.open)) { conn.close(); return; }
-    this.bind(from, conn);
-  }
-
-  private bind(who: Player, conn: DataConnection) {
-    this.links.set(who, conn);
-    const opened = () => {
-      this.send1(conn, {type: 'HELLO', room: this.code, name: this.names[this.me] ?? this.me, ...(this.me === 'P1' ? {config: this.config} : {})});
-      this.refresh();
+    let seat: Seat | undefined;
+    const deny = (reason: string) => { if (conn.open) conn.send({type: 'DENIED', reason} satisfies Wire); setTimeout(() => conn.close(), 300); };
+    conn.on('data', raw => {
+      try {
+        const m = raw as Wire;
+        if (!m || typeof m !== 'object') throw Error('Pacote inválido');
+        if (!seat) {
+          if (m.type !== 'HELLO' || m.room !== this.code) throw Error('Sala inválida');
+          if (this.locked) return deny('A partida já começou.');
+          if (this.seats.length + 1 >= this.capacity) return deny('Sala cheia.');
+          seat = {conn, name: playerName(m.name, seatName(this.seats.length)), here: true};
+          this.seats.push(seat);
+          const you = seatName(this.seats.length - 1);
+          this.roster = this.build();
+          conn.send({type: 'WELCOME', room: this.code, you, config: this.config, roster: this.roster} satisfies Wire);
+          this.publish();
+          return;
+        }
+        const who = seatName(this.seats.indexOf(seat));
+        if (m.type === 'NAME') { seat.name = playerName(m.name, who); this.publish(); return; }
+        if (CONTROL.includes(m.type)) return;
+        this.events.receive(who, raw);
+      } catch (e) {
+        this.events.failed((e as Error).message);
+      }
+    });
+    const gone = () => {
+      if (!seat || !seat.here || this.closed) return;
+      seat.here = false;
+      if (!this.locked) {
+        const at = this.seats.indexOf(seat);
+        this.seats.splice(at, 1);
+        this.seats.slice(at).forEach((s, i) => { if (s.conn.open) s.conn.send({type: 'SEAT', you: seatName(at + i)} satisfies Wire); });
+      }
+      this.publish();
     };
-    if (conn.open) opened(); else conn.on('open', opened);
-    conn.on('data', data => this.onData(who, conn, data));
-    const gone = () => { if (this.links.get(who) !== conn) return; this.ready.delete(who); this.refresh(); };
     conn.on('close', gone);
     conn.on('error', gone);
   }
 
-  private onData(who: Player, conn: DataConnection, raw: unknown) {
-    if (this.links.get(who) !== conn) return;
+  /* ---------- convidado ---------- */
+  private onGuestData(conn: DataConnection, raw: unknown) {
     try {
       const m = raw as Wire;
-      if (typeof m !== 'object' || m === null) throw Error('Pacote inválido');
-      if (m.type === 'HELLO' || m.type === 'READY' || m.type === 'NOT_READY') {
+      if (!m || typeof m !== 'object') throw Error('Pacote inválido');
+      if (m.type === 'WELCOME') {
         if (m.room !== this.code) throw Error('Sala inválida');
-        if (m.type === 'HELLO') this.hello(who, m);
-        else if (m.type === 'READY') { this.names[who] = playerName(m.name, who); this.ready.add(who); this.events.changed(); }
-        else { this.ready.delete(who); this.events.changed(); }
-        return;
-      }
-      this.events.receive(who, raw);
+        this.config = sanitizeConfig(m.config);
+        this.me = m.you; this.roster = m.roster;
+        this.onWelcome();
+        this.events.changed();
+      } else if (m.type === 'DENIED') { this.onWelcome(m.reason); }
+      else if (m.type === 'ROSTER') { this.roster = m.roster; this.events.changed(); }
+      else if (m.type === 'SEAT') { this.me = m.you; this.events.changed(); }
+      else if (!CONTROL.includes(m.type)) this.events.receive('P1', raw);
     } catch (e) {
       this.events.failed((e as Error).message);
     }
   }
-
-  private hello(who: Player, m: Extract<Wire, {type: 'HELLO'}>) {
-    this.names[who] = playerName(m.name, who);
-    if (who === 'P1' && !this.config) {
-      const config = sanitizeConfig(m.config);
-      if (!participants(config).includes(this.me)) { this.onReject('Sala cheia.'); return; }
-      this.config = config;
-      for (const p of this.others) if (p !== 'P1' && PLAYERS.indexOf(p) < PLAYERS.indexOf(this.me)) this.dial(p);
-      this.onConfig();
-    }
-    this.refresh();
-  }
-
-  private send1(conn: DataConnection, data: unknown) { if (conn.open) conn.send(data); }
-
-  /** Anuncia se já estou ligado a todos e avisa a interface. */
-  private refresh() {
+  private lost() {
     if (this.closed) return;
-    if (this.linked) {
-      this.ready.add(this.me);
-      for (const conn of this.links.values()) this.send1(conn, {type: 'READY', room: this.code, name: this.names[this.me] ?? this.me});
-    } else {
-      this.ready.delete(this.me);
-      for (const conn of this.links.values()) this.send1(conn, {type: 'NOT_READY', room: this.code});
-    }
+    this.events.failed('A conexão com o anfitrião caiu.');
     this.events.changed();
   }
 
+  setName(name: string) {
+    if (this.isHost) { this.hostName = playerName(name, 'P1'); this.publish(); }
+    else if (this.hostLink?.open) this.hostLink.send({type: 'NAME', name: playerName(name, this.me)} satisfies Wire);
+  }
+
+  /** Convidado: envia ao anfitrião. Anfitrião: envia a todos. */
   send(data: unknown) {
-    if (!this.complete) throw Error('Todos os jogadores precisam estar conectados.');
-    for (const conn of this.links.values()) conn.send(data);
+    if (this.isHost) { for (const s of this.seats) if (s.here && s.conn.open) s.conn.send(data); }
+    else if (this.hostLink?.open) this.hostLink.send(data);
+    else throw Error('Conexão indisponível.');
+  }
+  /** Só o anfitrião: envia a um assento. */
+  sendTo(p: Player, data: unknown) {
+    const s = this.seats[Number(p.slice(1)) - 2];
+    if (s?.here && s.conn.open) s.conn.send(data);
   }
 
   close() {
     this.closed = true;
-    for (const conn of this.links.values()) conn.close();
+    for (const s of this.seats) s.conn.close();
+    this.hostLink?.close();
     this.peer.destroy();
   }
 }

@@ -1,0 +1,8 @@
+# O Vite grava o build em web/ (npm run build usa --outDir web), que também é versionado
+# para o launcher Python, o EXE e o APK. O Netlify precisa publicar essa mesma pasta.
+[build]
+  command = "npm run build"
+  publish = "web"
+
+[build.environment]
+  NODE_VERSION = "22"
